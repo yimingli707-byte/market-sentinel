@@ -1,0 +1,5 @@
+ccxt==4.4.99
+pandas>=2.2,<3
+yfinance>=0.2.54
+requests>=2.32
+streamlit>=1.42
