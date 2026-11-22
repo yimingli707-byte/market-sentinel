@@ -2,7 +2,7 @@ import os
 import json
 import time
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import ccxt
 import pandas as pd
@@ -12,10 +12,11 @@ import yfinance as yf
 OUT = Path("signals.json")
 STATE_FILE = Path("signal_state.json")
 PUSHPLUS_TOKEN = os.getenv("PUSHPLUS_TOKEN", "").strip()
+COOLDOWN_HOURS = 6
 
 CRYPTO = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-# Yahoo Finance symbols; these are market-data symbols, not OKX instrument IDs.
 STOCKS = ["QQQ", "SOXX", "NVDA", "AMD", "AVGO", "GOOGL", "MU", "SNDK", "000660.KS"]
+
 
 def _rsi(series, period=14):
     delta = series.diff()
@@ -27,6 +28,7 @@ def _rsi(series, period=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi.fillna(100).where(avg_loss != 0, 100).where(avg_gain != 0, 0)
 
+
 def indicators(df, market):
     df = df.copy().sort_index()
     for n in (20, 50, 200):
@@ -34,17 +36,18 @@ def indicators(df, market):
     df["rsi14"] = _rsi(df["close"], 14)
     df["vol_avg20"] = df["volume"].rolling(20).mean()
     df["prior_high3"] = df["high"].shift(1).rolling(3).max()
+    df["prior_low3"] = df["low"].shift(1).rolling(3).min()
+    prev_close = df["close"].shift(1)
+    tr = pd.concat([(df["high"] - df["low"]), (df["high"] - prev_close).abs(),
+                    (df["low"] - prev_close).abs()], axis=1).max(axis=1)
+    df["atr14"] = tr.rolling(14).mean()
+    df["swing_low10"] = df["low"].shift(1).rolling(10).min()
+    df["swing_high10"] = df["high"].shift(1).rolling(10).max()
 
-    # Session VWAP: reset each exchange-local trading day for stocks,
-    # UTC day for crypto. This is a bar-based approximation using HLC3.
     idx = pd.DatetimeIndex(df.index)
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
-    if market == "美股/韩股":
-        # yfinance returns the exchange timezone in the index.
-        session_key = idx.date
-    else:
-        session_key = idx.tz_convert("UTC").date
+    session_key = idx.date if market == "美股/韩股" else idx.tz_convert("UTC").date
     typical = (df["high"] + df["low"] + df["close"]) / 3
     work = pd.DataFrame({"typical": typical, "volume": df["volume"]}, index=df.index)
     work["pv"] = work["typical"] * work["volume"]
@@ -53,122 +56,140 @@ def indicators(df, market):
     cum_vol = work.groupby("session")["volume"].cumsum().replace(0, float("nan"))
     df["vwap"] = cum_pv / cum_vol
 
-    # OHLCV cannot reveal aggressor-side trades. This is only a directional
-    # candle-volume proxy, NOT true exchange Delta/CVD.
-    candle_direction = (df["close"] > df["open"]).astype(int) - (df["close"] < df["open"]).astype(int)
-    df["delta_proxy"] = candle_direction * df["volume"]
-    df["delta_proxy_ratio20"] = (
-        df["delta_proxy"].rolling(20).sum() /
-        df["volume"].rolling(20).sum().replace(0, float("nan"))
-    )
-    return df.dropna(subset=["ema20", "ema50", "ema200", "rsi14", "vol_avg20", "vwap"])
+    # OHLCV candle-direction volume proxy, not true aggressor Delta/CVD.
+    direction = (df["close"] > df["open"]).astype(int) - (df["close"] < df["open"]).astype(int)
+    df["delta_proxy"] = direction * df["volume"]
+    df["delta_proxy_ratio20"] = df["delta_proxy"].rolling(20).sum() / df["volume"].rolling(20).sum().replace(0, float("nan"))
+    return df.dropna(subset=["ema20", "ema50", "ema200", "rsi14", "vol_avg20", "vwap", "atr14", "swing_low10", "swing_high10"])
+
 
 def classify(symbol, raw, market):
     if raw is None or len(raw) < 220:
-        return {"symbol": symbol, "market": market, "signal": "数据不足", "score": 0,
-                "detail": "有效K线少于220根，无法可靠计算EMA200"}
+        return {"symbol": symbol, "market": market, "signal": "数据不足", "score": 0, "detail": "有效K线少于220根，无法可靠计算EMA200"}
     d = indicators(raw, market)
-    if len(d) < 2:
-        return {"symbol": symbol, "market": market, "signal": "数据不足", "score": 0,
-                "detail": "指标计算失败或有效数据不足"}
+    if len(d) < 3:
+        return {"symbol": symbol, "market": market, "signal": "数据不足", "score": 0, "detail": "指标计算失败或有效数据不足"}
     x, p = d.iloc[-1], d.iloc[-2]
-    vol_ratio = float(x["volume"] / x["vol_avg20"]) if x["vol_avg20"] > 0 else 0
-    rsi = float(x["rsi14"])
-    prev_rsi = float(p["rsi14"])
-    above_vwap = bool(x["close"] > x["vwap"])
-    reclaim_vwap = bool(p["close"] <= p["vwap"] and x["close"] > x["vwap"])
-    ema_rising = bool(x["ema20"] > p["ema20"])
-    rsi_recovering = bool(rsi > prev_rsi and (prev_rsi < 35 or rsi < 40))
-    breakout3 = bool(pd.notna(x["prior_high3"]) and x["close"] > x["prior_high3"])
-    delta_proxy = float(x["delta_proxy_ratio20"]) if pd.notna(x["delta_proxy_ratio20"]) else 0.0
+    close, rsi, prev_rsi = float(x.close), float(x.rsi14), float(p.rsi14)
+    vwap, atr = float(x.vwap), float(x.atr14)
+    vol_ratio = float(x.volume / x.vol_avg20) if x.vol_avg20 > 0 else 0.0
+    above_vwap = close > vwap
+    below_vwap = close < vwap
+    reclaim_vwap = float(p.close) <= float(p.vwap) and above_vwap
+    lose_vwap = float(p.close) >= float(p.vwap) and below_vwap
+    ema_up = float(x.ema20) > float(p.ema20)
+    ema_down = float(x.ema20) < float(p.ema20)
+    rsi_up = rsi > prev_rsi
+    rsi_down = rsi < prev_rsi
+    breakout = close > float(x.prior_high3)
+    breakdown = close < float(x.prior_low3)
+    delta = float(x.delta_proxy_ratio20) if pd.notna(x.delta_proxy_ratio20) else 0.0
+    long_trend = float(x.ema20) > float(x.ema50)
+    short_trend = float(x.ema20) < float(x.ema50)
 
-    score = 0
-    reasons = []
-    if rsi < 30:
-        score += 25; reasons.append(f"RSI超卖({rsi:.1f})")
-    elif rsi < 40:
-        score += 15; reasons.append(f"RSI偏弱({rsi:.1f})")
-    if rsi_recovering:
-        score += 15; reasons.append("RSI开始回升")
-    if reclaim_vwap:
-        score += 25; reasons.append("本根K线重新站上VWAP")
-    elif above_vwap:
-        score += 15; reasons.append("价格位于VWAP上方")
-    if vol_ratio >= 1.5:
-        score += 15; reasons.append(f"成交量为20周期均量的{vol_ratio:.1f}倍")
-    elif vol_ratio >= 1.2:
-        score += 8; reasons.append(f"成交量放大({vol_ratio:.1f}倍)")
-    if ema_rising:
-        score += 8; reasons.append("EMA20向上")
-    if delta_proxy > 0.10:
-        score += 7; reasons.append("K线方向成交量代理值偏正")
+    long_confirm = above_vwap and ema_up and long_trend and rsi_up and rsi >= 40 and breakout and vol_ratio >= 1.2 and delta > 0
+    short_confirm = below_vwap and ema_down and short_trend and rsi_down and rsi <= 60 and breakdown and vol_ratio >= 1.2 and delta < 0
 
-    # Signal hierarchy: oversold is an alert, not an entry instruction.
-    if above_vwap and reclaim_vwap and rsi_recovering and ema_rising and vol_ratio >= 1.2:
-        signal = "反弹启动观察"
-    elif above_vwap and breakout3 and ema_rising and vol_ratio >= 1.2:
-        signal = "反弹确认观察"
-        score = min(100, score + 10)
-        reasons.append("收盘价突破此前3根K线高点")
-    elif rsi < 30 and not above_vwap:
-        signal = "超跌预警"
-    elif rsi_recovering and not above_vwap:
-        signal = "反弹观察"
+    if long_confirm:
+        signal, side, score = "做多机会候选", "做多", 80
+        entry_low, entry_high = close - atr * 0.15, close + atr * 0.10
+        stop = min(float(x.swing_low10), close - atr * 1.5)
+        invalidation = f"收盘重新跌回VWAP下方，或跌破止损参考位 {stop:.6f}"
+        action = "条件满足，可考虑小仓分批试多；不要追高，优先等待回踩。"
+    elif short_confirm:
+        signal, side, score = "做空机会候选", "做空", 80
+        entry_low, entry_high = close - atr * 0.10, close + atr * 0.15
+        stop = max(float(x.swing_high10), close + atr * 1.5)
+        invalidation = f"收盘重新站回VWAP上方，或突破止损参考位 {stop:.6f}"
+        action = "条件满足，可考虑小仓分批试空；不要追跌，优先等待反抽。"
+    elif rsi < 30 and below_vwap:
+        signal, side, score = "超跌预警", "观望", 25
+        entry_low = entry_high = stop = None
+        invalidation = "RSI回升且价格收复VWAP后，重新评估反弹机会。"
+        action = "暂不抄底；超卖可能持续，等待止跌和收复VWAP。"
+    elif rsi_up and (reclaim_vwap or above_vwap):
+        signal, side, score = "反弹观察", "观望", 45
+        entry_low = entry_high = stop = None
+        invalidation = "重新跌破VWAP且RSI转弱，反弹观察失效。"
+        action = "继续观察，不把单次站上VWAP当作买入信号。"
+    elif below_vwap and ema_down and rsi_down:
+        signal, side, score = "下行趋势观察", "观望", 45
+        entry_low = entry_high = stop = None
+        invalidation = "重新站回VWAP且EMA20转升，空头观察失效。"
+        action = "暂不追空；等待反抽受阻或更明确的破位确认。"
     else:
-        signal = "观望"
+        signal, side, score = "观望", "观望", 0
+        entry_low = entry_high = stop = None
+        invalidation = "当前没有形成明确交易结构。"
+        action = "暂时不操作，等待新的确认信号。"
 
     return {
-        "symbol": symbol, "market": market, "signal": signal,
-        "score": min(score, 100),
-        "close": round(float(x["close"]), 6),
-        "rsi14": round(rsi, 2),
-        "vwap": round(float(x["vwap"]), 6),
-        "above_vwap": above_vwap,
-        "volume_ratio": round(vol_ratio, 2),
-        "ema20": round(float(x["ema20"]), 6),
-        "ema50": round(float(x["ema50"]), 6),
-        "ema200": round(float(x["ema200"]), 6),
-        "delta_proxy_ratio20": round(delta_proxy, 3),
+        "symbol": symbol, "market": market, "signal": signal, "score": score,
+        "side": side, "action": action,
+        "close": round(close, 6), "rsi14": round(rsi, 2), "vwap": round(vwap, 6),
+        "above_vwap": above_vwap, "volume_ratio": round(vol_ratio, 2),
+        "ema20": round(float(x.ema20), 6), "ema50": round(float(x.ema50), 6),
+        "ema200": round(float(x.ema200), 6), "atr14": round(atr, 6),
+        "entry_zone": [round(entry_low, 6), round(entry_high, 6)] if entry_low is not None else None,
+        "stop_reference": round(stop, 6) if stop is not None else None,
+        "invalidation": invalidation,
+        "delta_proxy_ratio20": round(delta, 3),
         "time": datetime.now(timezone.utc).isoformat(),
-        "detail": "；".join(reasons) if reasons else "暂未满足反弹条件",
-        "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta"
+        "detail": "RSI回升" if rsi_up else "RSI走弱",
+        "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
     }
+
 
 def fetch_crypto(exchange, symbol):
     rows = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=300)
-    frame = pd.DataFrame(rows, columns=["ts","open","high","low","close","volume"])
+    frame = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
     frame.index = pd.to_datetime(frame.pop("ts"), unit="ms", utc=True)
-    return frame[["open","high","low","close","volume"]].astype(float)
+    # Exclude the still-forming hourly candle to avoid intrabar signal flicker.
+    current_hour = pd.Timestamp.now(tz="UTC").floor("h")
+    frame = frame[frame.index < current_hour]
+    return frame[["open", "high", "low", "close", "volume"]].astype(float)
+
 
 def fetch_stock(symbol):
     hist = yf.Ticker(symbol).history(period="3mo", interval="1h", auto_adjust=True, prepost=False)
     if hist.empty:
         return None
     hist.columns = [str(c).lower() for c in hist.columns]
-    frame = hist[["open","high","low","close","volume"]].dropna()
-    return frame.astype(float)
+    return hist[["open", "high", "low", "close", "volume"]].dropna().astype(float)
+
 
 def send_push(message):
     if not PUSHPLUS_TOKEN:
         print("PUSHPLUS_TOKEN 未设置，跳过微信推送")
-        return
+        return False
     try:
-        response = requests.post(
-            "https://www.pushplus.plus/send",
-            json={"token": PUSHPLUS_TOKEN, "title": "Market Sentinel 2.0 反弹提醒",
-                  "content": message, "template": "html"},
-            timeout=15
-        )
+        response = requests.post("https://www.pushplus.plus/send",
+            json={"token": PUSHPLUS_TOKEN, "title": "Market Sentinel 3.0 交易机会提醒", "content": message, "template": "html"}, timeout=15)
         print("PushPlus:", response.status_code, response.text[:300])
         response.raise_for_status()
+        try:
+            return response.json().get("code") == 200
+        except Exception:
+            return False
     except Exception as exc:
         print("PushPlus error:", exc)
+        return False
+
 
 def load_state():
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        obj = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        # Migrate v2's {symbol: signal} format.
+        if isinstance(obj, dict) and "symbols" not in obj:
+            return {"symbols": {k: {"signal": v} for k, v in obj.items()}, "last_push": {}}
+        if isinstance(obj, dict):
+            obj.setdefault("symbols", {})
+            obj.setdefault("last_push", {})
+            return obj
     except Exception:
-        return {}
+        pass
+    return {"symbols": {}, "last_push": {}}
+
 
 def main():
     results = []
@@ -177,44 +198,58 @@ def main():
         try:
             results.append(classify(symbol, fetch_crypto(exchange, symbol), "加密货币"))
         except Exception as exc:
-            results.append({"symbol": symbol, "market": "加密货币", "signal": "获取失败",
-                            "score": 0, "detail": str(exc)[:180]})
+            results.append({"symbol": symbol, "market": "加密货币", "signal": "获取失败", "score": 0, "detail": str(exc)[:180]})
         time.sleep(0.3)
-
     for symbol in STOCKS:
         try:
             results.append(classify(symbol, fetch_stock(symbol), "美股/韩股"))
         except Exception as exc:
-            results.append({"symbol": symbol, "market": "美股/韩股", "signal": "获取失败",
-                            "score": 0, "detail": str(exc)[:180]})
+            results.append({"symbol": symbol, "market": "美股/韩股", "signal": "获取失败", "score": 0, "detail": str(exc)[:180]})
         time.sleep(1)
 
     OUT.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    # Notify only on a signal-state change, to avoid repeated messages every 15 min.
-    old_state = load_state()
-    new_state = {}
-    notify = []
-    alert_states = {"超跌预警", "反弹观察", "反弹启动观察", "反弹确认观察"}
+    state = load_state()
+    now = datetime.now(timezone.utc)
+    candidates = []
     for item in results:
         symbol = item["symbol"]
-        state = item.get("signal", "观望")
-        new_state[symbol] = state
-        if state in alert_states and old_state.get(symbol) != state:
-            notify.append(item)
-    STATE_FILE.write_text(json.dumps(new_state, ensure_ascii=False, indent=2), encoding="utf-8")
+        signal = item.get("signal", "观望")
+        previous = state["symbols"].get(symbol, {})
+        previous_signal = previous.get("signal") if isinstance(previous, dict) else previous
+        state["symbols"][symbol] = {"signal": signal, "time": item.get("time")}
+        if signal not in ("做多机会候选", "做空机会候选"):
+            continue
+        last_text = state["last_push"].get(symbol)
+        last_time = None
+        if last_text:
+            try:
+                last_time = datetime.fromisoformat(last_text)
+            except Exception:
+                pass
+        is_new_opportunity = previous_signal != signal
+        cooldown_over = last_time is None or now - last_time >= timedelta(hours=COOLDOWN_HOURS)
+        if is_new_opportunity or cooldown_over:
+            candidates.append(item)
 
-    if notify:
-        lines = []
-        for item in notify:
-            lines.append(
-                f"<b>{item['symbol']}</b>：{item['signal']}｜评分 {item['score']}/100"
-                f"<br>收盘/最新价：{item.get('close','-')}｜RSI：{item.get('rsi14','-')}"
-                f"｜VWAP：{item.get('vwap','-')}｜量比：{item.get('volume_ratio','-')}"
-                f"<br>{item.get('detail','')}"
+    if candidates:
+        blocks = ["<b>交易机会候选（规则筛选，不是自动下单）</b>"]
+        for item in candidates:
+            zone = item.get("entry_zone") or ["-", "-"]
+            blocks.append(
+                f"<b>{item['symbol']}｜{item['signal']}｜评分 {item['score']}/100</b>"
+                f"<br>现价：{item.get('close', '-')}｜RSI：{item.get('rsi14', '-')}｜VWAP：{item.get('vwap', '-')}｜量比：{item.get('volume_ratio', '-')}"
+                f"<br><b>操作思路：</b>{item.get('action', '-') }"
+                f"<br>参考观察区间：{zone[0]} – {zone[1]}｜止损参考：{item.get('stop_reference', '-')}"
+                f"<br>失效条件：{item.get('invalidation', '-')}"
+                f"<br>注意：止损参考是波动/结构估算，不保证成交；请自行核对行情和仓位。"
             )
-        send_push("<br><br>".join(lines))
+        if send_push("<br><br>".join(blocks)):
+            for item in candidates:
+                state["last_push"][item["symbol"]] = now.isoformat()
+
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(results, ensure_ascii=False, indent=2))
+
 
 if __name__ == "__main__":
     main()
