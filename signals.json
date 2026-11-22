@@ -19,7 +19,7 @@
     "stop_reference": null,
     "invalidation": "当前没有形成明确交易结构。",
     "delta_proxy_ratio20": 0.04,
-    "time": "2026-11-22T16:10:37.799125+00:00",
+    "time": "2026-11-22T16:54:37.538294+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -43,7 +43,7 @@
     "stop_reference": null,
     "invalidation": "重新跌破VWAP且RSI转弱，反弹观察失效。",
     "delta_proxy_ratio20": -0.003,
-    "time": "2026-11-22T16:10:38.309656+00:00",
+    "time": "2026-11-22T16:54:38.015793+00:00",
     "detail": "RSI回升",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -67,7 +67,7 @@
     "stop_reference": null,
     "invalidation": "当前没有形成明确交易结构。",
     "delta_proxy_ratio20": -0.182,
-    "time": "2026-11-22T16:10:38.808953+00:00",
+    "time": "2026-11-22T16:54:38.491644+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -94,7 +94,7 @@
     "stop_reference": 658.109924,
     "invalidation": "收盘重新站回VWAP上方，或突破止损参考位 658.109924",
     "delta_proxy_ratio20": -0.721,
-    "time": "2026-11-22T16:10:39.968384+00:00",
+    "time": "2026-11-22T16:54:39.643220+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -121,7 +121,7 @@
     "stop_reference": 141.639999,
     "invalidation": "收盘重新站回VWAP上方，或突破止损参考位 141.639999",
     "delta_proxy_ratio20": -0.737,
-    "time": "2026-11-22T16:10:41.251569+00:00",
+    "time": "2026-11-22T16:54:40.932606+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -148,7 +148,7 @@
     "stop_reference": 150.770004,
     "invalidation": "收盘重新站回VWAP上方，或突破止损参考位 150.770004",
     "delta_proxy_ratio20": -0.789,
-    "time": "2026-11-22T16:10:42.525733+00:00",
+    "time": "2026-11-22T16:54:42.213078+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -172,7 +172,7 @@
     "stop_reference": null,
     "invalidation": "RSI回升且价格收复VWAP后，重新评估反弹机会。",
     "delta_proxy_ratio20": -0.557,
-    "time": "2026-11-22T16:10:43.790251+00:00",
+    "time": "2026-11-22T16:54:43.483990+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -196,7 +196,7 @@
     "stop_reference": null,
     "invalidation": "RSI回升且价格收复VWAP后，重新评估反弹机会。",
     "delta_proxy_ratio20": -0.56,
-    "time": "2026-11-22T16:10:45.113040+00:00",
+    "time": "2026-11-22T16:54:44.824847+00:00",
     "detail": "RSI回升",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -223,7 +223,7 @@
     "stop_reference": 286.190002,
     "invalidation": "收盘重新站回VWAP上方，或突破止损参考位 286.190002",
     "delta_proxy_ratio20": -0.571,
-    "time": "2026-11-22T16:10:46.346138+00:00",
+    "time": "2026-11-22T16:54:46.206114+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -247,7 +247,7 @@
     "stop_reference": null,
     "invalidation": "RSI回升且价格收复VWAP后，重新评估反弹机会。",
     "delta_proxy_ratio20": -0.636,
-    "time": "2026-11-22T16:10:47.644859+00:00",
+    "time": "2026-11-22T16:54:47.497947+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -271,7 +271,7 @@
     "stop_reference": null,
     "invalidation": "RSI回升且价格收复VWAP后，重新评估反弹机会。",
     "delta_proxy_ratio20": -0.965,
-    "time": "2026-11-22T16:10:48.918231+00:00",
+    "time": "2026-11-22T16:54:48.779874+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   },
@@ -295,7 +295,7 @@
     "stop_reference": null,
     "invalidation": "重新站回VWAP且EMA20转升，空头观察失效。",
     "delta_proxy_ratio20": -0.246,
-    "time": "2026-11-22T16:10:50.164559+00:00",
+    "time": "2026-11-22T16:54:50.025711+00:00",
     "detail": "RSI走弱",
     "data_note": "Delta为K线方向成交量代理值，不是真实逐笔主动买卖Delta；评分是规则匹配分，不是胜率。"
   }
