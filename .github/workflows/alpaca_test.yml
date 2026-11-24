@@ -1,0 +1,62 @@
+name: Alpaca API Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test Alpaca market data
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+        run: |
+          python - <<'PY'
+          import os
+          import requests
+
+          key = os.environ["ALPACA_API_KEY"]
+          secret = os.environ["ALPACA_SECRET_KEY"]
+
+          url = "https://data.alpaca.markets/v2/stocks/bars/latest"
+
+          headers = {
+              "APCA-API-KEY-ID": key,
+              "APCA-API-SECRET-KEY": secret
+          }
+
+          params = {
+              "symbols": "NVDA,QQQ,SOXX",
+              "feed": "iex"
+          }
+
+          response = requests.get(
+              url,
+              headers=headers,
+              params=params,
+              timeout=20
+          )
+
+          print("HTTP状态码：", response.status_code)
+
+          if response.status_code != 200:
+              print("请求失败：", response.text[:1000])
+              raise SystemExit(1)
+
+          data = response.json().get("bars", {})
+
+          for symbol in ["NVDA", "QQQ", "SOXX"]:
+              bar = data.get(symbol)
+
+              if bar:
+                  print(
+                      symbol,
+                      "最新价格：", bar.get("c"),
+                      "成交量：", bar.get("v"),
+                      "行情时间：", bar.get("t")
+                  )
+              else:
+                  print(symbol, "没有返回行情数据")
+          PY
